@@ -23,9 +23,13 @@ A prototype iPhone home-screen app for planning 3–6 outdoor activities a year 
 - **Works offline:** activity cards and the emergency sheet open with no signal once the app has been opened at least once.
 - **Place library:** 13 ideas near Spokane, WA. Fees and rules change, so verify before you go.
 
-## Privacy
+## Shared data (Google Sheet)
 
-Data is stored only on the device where it was entered, in the browser's storage. Use **Settings → Export backup** to save a copy or to send it to another leader, who can import it. Medical details are not stored; the app only tracks whether each form was received.
+Connect the app to the **Trailhead Data** Google Sheet so leaders and youth leaders share one plan. A short Apps Script in the sheet (`apps-script/Code.gs`) saves and loads the data, protected by a passcode. Each phone keeps a copy for offline use and syncs when it has a signal. See **[SETUP.md](SETUP.md)** for setup.
+
+Without a sheet, data stays on the device. **Settings → Export backup** saves a copy. Medical details are never stored; the app tracks only whether each form was received.
+
+Live app: https://uwditto-maker.github.io/Youth-activity-planner/ (after GitHub Pages is turned on; see SETUP.md).
 
 ## Run it
 
@@ -45,11 +49,11 @@ Then open http://localhost:8000. To use it on an iPhone, host the folder on any 
 - `styles.css`: styles, including light and dark mode
 - `sw.js`: offline cache
 - `manifest.webmanifest`: home-screen app settings
+- `apps-script/Code.gs`: sync script to paste into the Google Sheet
 - `icons/`: app icons
 
 ## Next steps (not in the prototype)
 
-- Shared data through a ward Google Sheet, so leaders and youth see the same plan.
 - Automatic reminders sent through Gmail.
 - Youth RSVP links.
 

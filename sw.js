@@ -1,5 +1,5 @@
 // Offline support: cache the app shell so Trailhead opens at camp with no signal.
-const CACHE = 'trailhead-v1';
+const CACHE = 'trailhead-v2';
 const SHELL = ['./', 'index.html', 'styles.css', 'app.js', 'data.js', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-180.png', 'icons/icon-192.png'];
 
 self.addEventListener('install', (e) => {

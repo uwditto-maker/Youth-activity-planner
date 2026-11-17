@@ -8,7 +8,7 @@
   const PCY_YEARS = 3; // Protecting Children and Youth training renews every 3 years.
 
   // ---------- state ----------
-  const blank = () => ({ version: 1, unit: { name: '' }, youth: [], leaders: [], activities: [] });
+  const blank = () => ({ version: 1, unit: { name: '' }, youth: [], leaders: [], activities: [], deleted: {} });
   let S = load();
 
   function load() {
@@ -18,10 +18,14 @@
     } catch (e) { /* storage unavailable */ }
     return blank();
   }
-  function save() {
+  function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { toast('Could not save on this device'); }
   }
+  function save() { saveLocal(); Sync.changed(); }
   const uid = () => Math.random().toString(36).slice(2, 10);
+  // Every shared record carries u (last changed). Sync keeps the newest copy of each record.
+  const touch = (rec) => { if (rec) rec.u = Date.now(); };
+  const tombstone = (id) => { S.deleted[id] = Date.now(); };
 
   // ---------- helpers ----------
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -81,7 +85,16 @@
     }
     return { obj, key: parts[parts.length - 1] };
   }
-  function setPath(path, value) { const r = resolve(path); if (r && r.obj) { r.obj[r.key] = value; save(); } }
+  function setPath(path, value) {
+    const r = resolve(path);
+    if (!r || !r.obj) return;
+    r.obj[r.key] = value;
+    const parts = path.split('.');
+    if (parts[0] === 'a') touch(currentActivity());
+    else if (parts[1] === 'unit') touch(S.unit);
+    else { const [k, id] = parts[1].split('#'); touch(byId(S[k] || [], id)); }
+    save();
+  }
 
   // ---------- activity model ----------
   function newActivity(p) {
@@ -93,7 +106,7 @@
       rides: [], budget: [], attendance: {}, leadersAttending: [],
       emergency: { er: '', erPhone: '', contact: '', cell: '', meet: '' },
       permitsDone: false, vehicleCheck: false, bishopApproved: false,
-      reflections: [], created: Date.now()
+      reflections: [], created: Date.now(), u: Date.now()
     };
   }
   function currentActivity() { return byId(S.activities, route.id) || null; }
@@ -159,9 +172,10 @@
     const tab = route.view === 'activity' || route.view === 'new' ? 'year' : route.view;
     document.querySelectorAll('#tabbar a').forEach((el) => el.classList.toggle('on', el.dataset.tab === tab));
     document.body.classList.toggle('in-activity', route.view === 'activity');
+    Sync.paint();
   }
-  function bar(title, { back, action } = {}) {
-    return `<div class="bar">${back ? `<a class="back" href="${back}" aria-label="Back">‹</a>` : '<span></span>'}<h1>${esc(title)}</h1>${action || '<span></span>'}</div>`;
+  function bar(title, { back, action, left } = {}) {
+    return `<div class="bar">${back ? `<a class="back" href="${back}" aria-label="Back">‹</a>` : left || '<span></span>'}<h1>${esc(title)}</h1>${action || '<span></span>'}</div>`;
   }
   const empty = (msg, btn) => `<div class="empty"><p>${msg}</p>${btn || ''}</div>`;
 
@@ -183,7 +197,8 @@
       if (count < 6) body += `<a class="btn primary block" href="#/new">Add an activity</a>`;
     }
     body += inviteList();
-    return [bar('Trailhead', { action: '<a class="iconbtn" href="#/new" aria-label="Add activity">＋</a>' }), body];
+    const left = Sync.on() ? `<a class="iconbtn" href="#/settings" aria-label="Sync status"><span class="syncdot" data-sync-status data-state=""></span></a>` : '';
+    return [bar('Trailhead', { left, action: '<a class="iconbtn" href="#/new" aria-label="Add activity">＋</a>' }), body];
   }
   function cardActivity(a) {
     const r = readiness(a), n = coming(a).length;
@@ -469,8 +484,9 @@
   // ----- Settings -----
   function viewSettings() {
     return [bar('Settings'), `<section class="panel form"><label>Quorum, class or ward name<input data-bind="s.unit.name" value="${esc(S.unit.name)}" placeholder="e.g. Spokane 5th Ward Young Men"></label></section>
-      <section class="panel"><h3>Backup and share</h3>
-        <p class="muted small">Everything is stored on this device only. Export a backup file to keep it safe or to send to another leader, who can import it.</p>
+      ${syncPanel()}
+      <section class="panel"><h3>Backup</h3>
+        <p class="muted small">Export a backup file to keep a copy or to hand the plan to another leader, who can import it.</p>
         <div class="row wrap"><button class="btn" data-action="export">Export backup</button>
         <label class="btn">Import backup<input type="file" accept="application/json,.json" id="importfile" hidden></label></div></section>
       <section class="panel"><h3>Install on iPhone</h3>
@@ -479,6 +495,20 @@
         <button class="btn" data-action="sample">Load sample roster</button>
         <button class="btn danger" data-action="reset">Erase everything</button></div></section>
       <p class="hint center">Trailhead prototype. Not an official Church app.</p>`];
+  }
+
+  function syncPanel() {
+    if (Sync.on()) {
+      return `<section class="panel"><h3>Shared Google Sheet</h3>
+        <p class="row"><span class="syncdot" data-sync-status data-state=""></span><span id="syncstatus" class="small">${esc(Sync.label())}</span></p>
+        <p class="muted small">Changes sync automatically when you have a signal. Everyone using the same web app URL and passcode sees the same plan.</p>
+        <div class="row wrap"><button class="btn" data-action="sync-now">Sync now</button><button class="btn danger" data-action="sync-off">Disconnect</button></div></section>`;
+    }
+    return `<section class="panel form"><h3>Shared Google Sheet</h3>
+      <p class="muted small">Connect to your ward's Trailhead Data sheet so leaders and youth leaders share one plan. Ask the leader who set it up for the web app URL and passcode.</p>
+      <label>Web app URL<input id="syncurl" type="url" inputmode="url" autocomplete="off" placeholder="https://script.google.com/macros/s/…/exec"></label>
+      <label>Passcode<input id="synckey" type="password" autocomplete="off"></label>
+      <button class="btn primary block" data-action="sync-connect">Connect</button></section>`;
   }
 
   // ---------- actions ----------
@@ -496,6 +526,7 @@
     if (!el) return;
     const act = el.dataset.action, a = currentActivity();
     if (el.tagName === 'INPUT' && act !== 'toggle-leader') return;
+    if (a && ['add', 'del', 'toggle-leader', 'starter-gear', 'starter-meals', 'starter-schedule', 'add-reflection'].includes(act)) touch(a);
     switch (act) {
       case 'add': {
         const item = Object.assign({ id: uid() }, DEFAULTS[el.dataset.list](el));
@@ -530,15 +561,24 @@
         if (!t) return;
         a.reflections.unshift({ id: uid(), text: t, at: Date.now() }); save(); render(); toast('Saved'); break;
       }
-      case 'add-youth': { const y = { id: uid(), name: '', org: 'YM', parentEmail: '', parentPhone: '' }; S.youth.push(y); save(); render(); focusNew(y.id); break; }
-      case 'add-leader': { const l = { id: uid(), name: '', gender: 'M', pcyDate: '' }; S.leaders.push(l); save(); render(); focusNew(l.id); break; }
+      case 'add-youth': { const y = { id: uid(), name: '', org: 'YM', parentEmail: '', parentPhone: '', u: Date.now() }; S.youth.push(y); save(); render(); focusNew(y.id); break; }
+      case 'add-leader': { const l = { id: uid(), name: '', gender: 'M', pcyDate: '', u: Date.now() }; S.leaders.push(l); save(); render(); focusNew(l.id); break; }
       case 'del-person': {
-        const p = byId(S[el.dataset.list], el.dataset.id);
+        const id = el.dataset.id, p = byId(S[el.dataset.list], id);
         if (!confirm(`Remove ${p.name || 'this person'} from the roster?`)) return;
-        S[el.dataset.list] = S[el.dataset.list].filter((x) => x.id !== el.dataset.id);
-        S.activities.forEach((x) => { delete x.attendance[el.dataset.id]; x.leadersAttending = x.leadersAttending.filter((i) => i !== el.dataset.id); });
+        S[el.dataset.list] = S[el.dataset.list].filter((x) => x.id !== id);
+        tombstone(id);
+        S.activities.forEach((x) => {
+          if (x.attendance[id] || x.leadersAttending.includes(id)) touch(x);
+          delete x.attendance[id]; x.leadersAttending = x.leadersAttending.filter((i) => i !== id);
+        });
         save(); render(); break;
       }
+      case 'sync-connect': Sync.connect($('#syncurl').value.trim(), $('#synckey').value.trim()); break;
+      case 'sync-now': Sync.now(true); break;
+      case 'sync-off':
+        if (confirm('Stop syncing this device? Your data stays on this phone and in the sheet.')) Sync.disconnect();
+        break;
       case 'menu': activityMenu(a); break;
       case 'print': window.print(); break;
       case 'email-parents': emailParents(a); break;
@@ -547,7 +587,9 @@
       case 'export': exportJSON(); break;
       case 'sample': loadSample(); break;
       case 'reset':
-        if (confirm('Erase all activities and people on this device? Export a backup first if you want to keep them.')) { S = blank(); save(); go('#/'); toast('Erased'); }
+        if (confirm(Sync.on() ? "Erase this phone's copy? Your shared Google Sheet is not changed, and this phone will download it again on the next sync." : 'Erase all activities and people on this device? Export a backup first if you want to keep them.')) {
+          S = blank(); saveLocal(); Sync.resetRev(); go('#/'); toast('Erased'); Sync.now();
+        }
         break;
     }
   }
@@ -664,11 +706,11 @@
     if (choice === 'ics') downloadICS(a);
     else if (choice === 'dup') {
       const copyA = JSON.parse(JSON.stringify(a));
-      Object.assign(copyA, { id: uid(), title: a.title + ' (copy)', start: '', end: '', purpose: '', theme: '', scriptures: '', themeBy: '', devotionals: [], attendance: {}, leadersAttending: [], reflections: [], permitsDone: false, bishopApproved: false, vehicleCheck: false, created: Date.now() });
+      Object.assign(copyA, { id: uid(), title: a.title + ' (copy)', start: '', end: '', purpose: '', theme: '', scriptures: '', themeBy: '', devotionals: [], attendance: {}, leadersAttending: [], reflections: [], permitsDone: false, bishopApproved: false, vehicleCheck: false, created: Date.now(), u: Date.now() });
       copyA.gear.forEach((g) => { g.done = false; g.id = uid(); });
       S.activities.push(copyA); save(); go(`#/a/${copyA.id}/why`); toast('Copied. The youth choose a new purpose and theme.');
     } else if (choice === 'del') {
-      if (confirm(`Delete "${a.title}"? This can't be undone.`)) { S.activities = S.activities.filter((x) => x.id !== a.id); save(); go('#/'); }
+      if (confirm(`Delete "${a.title}"? This can't be undone.`)) { S.activities = S.activities.filter((x) => x.id !== a.id); tombstone(a.id); save(); go('#/'); }
     }
   }
 
@@ -679,19 +721,163 @@
       const data = JSON.parse(t);
       if (!data || !Array.isArray(data.activities)) throw new Error('bad');
       if (!confirm('Replace everything on this device with the backup?')) return;
-      S = Object.assign(blank(), data); save(); go('#/'); toast('Backup imported');
+      S = Object.assign(blank(), data);
+      const now = Date.now(); // imported records count as the newest edits
+      [...S.activities, ...S.youth, ...S.leaders].forEach((r) => { r.u = now; }); S.unit.u = now;
+      save(); go('#/'); toast('Backup imported');
     }).catch(() => toast("That file isn't a Trailhead backup"));
   }
 
   function loadSample() {
     if (S.youth.length && !confirm('Add sample youth and leaders to your roster?')) return;
     const ys = [['Ethan', 'YM'], ['Caleb', 'YM'], ['Josh', 'YM'], ['Samuel', 'YM'], ['Isaac', 'YM'], ['Tyler', 'YM'], ['Ben', 'YM'], ['Mia', 'YW'], ['Grace', 'YW'], ['Ava', 'YW']];
-    ys.forEach(([name, org]) => S.youth.push({ id: uid(), name, org, parentEmail: name.toLowerCase() + '.parent@example.com', parentPhone: '' }));
+    ys.forEach(([name, org]) => S.youth.push({ id: uid(), name, org, parentEmail: name.toLowerCase() + '.parent@example.com', parentPhone: '', u: Date.now() }));
     const ago = (y) => { const d = new Date(); d.setFullYear(d.getFullYear() - y); return d.toISOString().slice(0, 10); };
     [['Brother Allen', 'M', ago(1)], ['Brother Diaz', 'M', ago(2)], ['Sister Nguyen', 'F', ago(1)], ['Brother Park', 'M', ago(4)]]
-      .forEach(([name, gender, pcyDate]) => S.leaders.push({ id: uid(), name, gender, pcyDate }));
+      .forEach(([name, gender, pcyDate]) => S.leaders.push({ id: uid(), name, gender, pcyDate, u: Date.now() }));
     save(); render(); toast('Sample roster added (one leader has expired training on purpose)');
   }
+
+  // ---------- shared Google Sheet sync ----------
+  function mergeData(local, remote) {
+    if (!remote) return local;
+    const out = blank();
+    const del = Object.assign({}, remote.deleted || {});
+    Object.entries(local.deleted || {}).forEach(([id, t]) => { del[id] = Math.max(del[id] || 0, t); });
+    out.deleted = del;
+    ['activities', 'youth', 'leaders'].forEach((k) => {
+      const map = new Map();
+      (remote[k] || []).forEach((r) => map.set(r.id, r));
+      (local[k] || []).forEach((l) => { const r = map.get(l.id); if (!r || (l.u || 0) >= (r.u || 0)) map.set(l.id, l); });
+      out[k] = [...map.values()].filter((x) => !(del[x.id] >= (x.u || 0)));
+    });
+    const lu = (local.unit && local.unit.u) || 0, ru = (remote.unit && remote.unit.u) || 0;
+    out.unit = lu > ru ? local.unit : remote.unit || local.unit;
+    return out;
+  }
+
+  function sheetTables() {
+    const yes = (b) => (b ? 'Yes' : '');
+    const rsvp = { '': '', invited: 'Invited', yes: 'Coming', no: "Can't come" };
+    const acts = S.activities.slice().sort((x, y) => (x.start || '').localeCompare(y.start || ''));
+    return {
+      Activities: [['Activity', 'Start', 'End', 'Place', 'Who', 'Purpose (youth)', 'Gospel theme (youth)', 'Scriptures', 'Ready', 'Youth coming', 'Leaders going', 'Bishop approved']]
+        .concat(acts.map((a) => { const r = readiness(a); return [a.title, a.start, a.end, a.location, a.who, a.purpose, a.theme, a.scriptures, `${r.ok}/${r.total}`, String(coming(a).length), leadersGoing(a).map((l) => l.name).join(', '), yes(a.bishopApproved)]; })),
+      Youth: [['Name', 'Group', 'Parent email', 'Parent phone']].concat(S.youth.map((y) => [y.name, y.org, y.parentEmail, y.parentPhone])),
+      Leaders: [['Name', 'Man / Woman', 'Protecting Children and Youth training completed', 'Status']]
+        .concat(S.leaders.map((l) => [l.name, l.gender === 'F' ? 'Woman' : 'Man', l.pcyDate, pcyStatus(l).label])),
+      Attendance: [['Activity', 'Youth', 'RSVP', 'Invited by', 'Permission form', 'Medical form']]
+        .concat(...acts.map((a) => eligibleYouth(a).filter((y) => (a.attendance[y.id] || {}).rsvp).map((y) => {
+          const t = a.attendance[y.id]; return [a.title, y.name, rsvp[t.rsvp] || '', youthName(t.invitedBy), yes(t.permission), yes(t.medical)];
+        })))
+    };
+  }
+
+  const Sync = (function () {
+    const SK = 'trailhead.sync';
+    let cfg = {};
+    try { cfg = JSON.parse(localStorage.getItem(SK) || '{}'); } catch (e) { cfg = {}; }
+    cfg = Object.assign({ url: '', key: '', rev: 0, localVer: 0, pushedVer: 0, last: 0 }, cfg);
+    let status = cfg.url ? 'idle' : 'off', message = '', busy = false, again = false, timer = null;
+    const persist = () => { try { localStorage.setItem(SK, JSON.stringify(cfg)); } catch (e) { /* ignore */ } };
+    const dirty = () => cfg.localVer !== cfg.pushedVer;
+    const ERRORS = {
+      'wrong-passcode': 'Wrong passcode.',
+      'passcode-not-set': 'Set PASSCODE in the Apps Script, then deploy a new version.',
+      'bad-request': 'The sheet did not understand the request.'
+    };
+
+    async function call(body) {
+      const res = await fetch(cfg.url, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(Object.assign({ key: cfg.key }, body)) });
+      let data;
+      try { data = await res.json(); } catch (e) { throw { error: 'not-json' }; }
+      return data;
+    }
+    function applyRemote(remote) {
+      const before = JSON.stringify(S);
+      S = mergeData(S, remote);
+      saveLocal();
+      return before !== JSON.stringify(S);
+    }
+    async function cycle() {
+      const r = await call({ action: 'pull' });
+      if (!r.ok) throw r;
+      let changed = applyRemote(r.data);
+      cfg.rev = r.rev;
+      const localHasMore = r.data ? JSON.stringify(S) !== JSON.stringify(mergeData(blank(), r.data)) : (S.activities.length + S.youth.length + S.leaders.length > 0);
+      if (dirty() || localHasMore) {
+        for (let tries = 0; tries < 4; tries++) {
+          const ver = cfg.localVer;
+          const p = await call({ action: 'push', baseRev: cfg.rev, data: S, tables: sheetTables() });
+          if (p.ok) { cfg.rev = p.rev; cfg.pushedVer = ver; break; }
+          if (p.error !== 'conflict') throw p;
+          changed = applyRemote(p.data) || changed; cfg.rev = p.rev;
+        }
+      }
+      return changed;
+    }
+    async function now(manual) {
+      if (!cfg.url) return;
+      if (busy) { again = true; return; }
+      busy = true; status = 'syncing'; paint();
+      try {
+        const changed = await cycle();
+        status = 'ok'; message = ''; cfg.last = Date.now();
+        if (changed) safeRender();
+        if (manual) toast('Synced with Google Sheet');
+      } catch (e) {
+        status = navigator.onLine === false ? 'offline' : 'error';
+        message = status === 'offline' ? 'No signal. Changes are saved on this phone and will sync later.'
+          : (e && ERRORS[e.error]) || "Couldn't reach the sheet. Check the web app URL and that it is deployed for Anyone.";
+        if (manual) toast(message);
+      } finally {
+        busy = false; persist(); paint();
+        if (again) { again = false; now(); }
+      }
+    }
+    function safeRender() {
+      const el = document.activeElement;
+      if (el && /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName)) { pendingRender = true; return; }
+      const y = window.scrollY; render(); window.scrollTo(0, y);
+    }
+    function paint() {
+      document.querySelectorAll('[data-sync-status]').forEach((el) => { el.dataset.state = status; el.title = label(); });
+      const box = document.getElementById('syncstatus');
+      if (box) box.textContent = label();
+    }
+    function label() {
+      if (status === 'off') return 'Not connected';
+      if (status === 'syncing') return 'Syncing…';
+      if (status === 'ok') return 'Synced ' + (cfg.last ? new Date(cfg.last).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '');
+      if (status === 'idle') return dirty() ? 'Changes waiting to sync' : 'Connected';
+      return message;
+    }
+    return {
+      on: () => !!cfg.url,
+      cfg: () => cfg,
+      label, paint,
+      changed() {
+        cfg.localVer++; persist();
+        if (!cfg.url) return;
+        clearTimeout(timer); timer = setTimeout(now, 1500);
+      },
+      now,
+      resetRev() { cfg.rev = 0; cfg.pushedVer = cfg.localVer; persist(); },
+      async connect(url, key) {
+        if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) { toast('Paste the Web app URL from Apps Script (starts with https://script.google.com/)'); return; }
+        if (!key) { toast('Enter the passcode'); return; }
+        Object.assign(cfg, { url, key, rev: 0 }); persist();
+        await now(true);
+        if (status !== 'ok') { const m = message; Object.assign(cfg, { url: '', key: '' }); status = 'off'; persist(); render(); toast(m); return; }
+        render();
+      },
+      disconnect() { Object.assign(cfg, { url: '', key: '', rev: 0 }); status = 'off'; persist(); render(); }
+    };
+  })();
+  let pendingRender = false;
+  document.addEventListener('focusout', () => setTimeout(() => {
+    if (pendingRender && !/^(INPUT|TEXTAREA|SELECT)$/.test((document.activeElement || {}).tagName || '')) { pendingRender = false; const y = window.scrollY; render(); window.scrollTo(0, y); }
+  }, 0));
 
   let toastTimer;
   function toast(msg) { const t = $('#toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600); }
@@ -703,6 +889,10 @@
   document.addEventListener('submit', onSubmit);
   window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
   render();
+  Sync.now();
+  window.addEventListener('online', () => Sync.now());
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') Sync.now(); });
+  setInterval(() => { if (document.visibilityState === 'visible') Sync.now(); }, 60000);
   if ('serviceWorker' in navigator && location.protocol !== 'file:') navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__trailhead = { get state() { return S; }, checks, readiness };
+  window.__trailhead = { get state() { return S; }, checks, readiness, mergeData, Sync };
 })();

@@ -166,3 +166,11 @@ blockquote { margin: 0; padding: 10px 0; border-top: 1px solid var(--line); font
   .panel { border: 0; padding: 0; }
   main { max-width: none; }
 }
+
+/* sync status */
+.syncdot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.syncdot[data-state="ok"] { background: var(--ok); }
+.syncdot[data-state="syncing"] { background: var(--gold); animation: pulse 1s infinite alternate; }
+.syncdot[data-state="error"] { background: var(--bad); }
+.syncdot[data-state="idle"] { background: var(--gold); }
+@keyframes pulse { to { opacity: .35; } }
